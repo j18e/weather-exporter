@@ -1,11 +1,9 @@
 #!/usr/bin/env python
 
 from os import environ
-from prometheus_client import start_http_server, Gauge
 from requests import get
-from sys import stdin
 from time import strftime, localtime, sleep
-import json
+import psycopg2
 
 def log_message(message):
     ts = strftime('%Y-%m-%dT%H:%M:%S')
@@ -33,93 +31,73 @@ def render_time(timestamp):
         day = strftime('%A', localtime(timestamp))
     return (day, time)
 
-def set_current(entry, location):
-    current.labels(
-        location=location,
-        summary=entry['summary'],
-        humidity=entry['humidity'],
-        pop=entry['precipProbability'],
-        precip_mmph=entry['precipIntensity'],
-        wind_mps=entry['windSpeed']
-    ).set(entry['temperature'])
-
-def set_hourly(entries, location):
-    counter = 0
-    for entry in entries:
-        if counter < 10:
-            order = '0' + str(counter)
+def insert_hourly(cur, columns):
+    command = """INSERT INTO HOURLY ("""
+    for c in columns:
+        command+='{},'.format(c[0])
+    command = '{}) VALUES ('.format(command[:-1])
+    for c in columns:
+        if c[2] == 'TEXT':
+            command+="'{}',".format(c[1])
         else:
-            order = str(counter)
-        hourly.labels(
-            l0_order=order,
-            l1_location=location,
-            l2_day=render_time(entry['time'])[0],
-            l3_time=render_time(entry['time'])[1],
-            l4_summary=entry['summary'],
-            l5_humidity=str(round(entry['humidity'] * 100)) + ' %',
-            l6_pop=str(round(entry['precipProbability'] * 100)) + ' %',
-            l7_precip_mmph=str(round(entry['precipIntensity'], 1)) + ' mm',
-            l8_wind_mps=str(round(entry['windSpeed'])) + ' mps'
-        ).set(entry['apparentTemperature'])
-        counter+=1
+            command+='{},'.format(c[1])
+    command = '{});'.format(command[:-1])
+    cur.execute(command)
 
-def set_daily(entries, location):
-    counter = 0
-    for entry in entries:
-        if counter < 10:
-            order = '0' + str(counter)
-        else:
-            order = str(counter)
-    for entry in entries:
-        daily.labels(
-            order=order,
-            location=location,
-            day=render_time(entry['time'])[0],
-            summary=entry['summary'],
-            humidity=entry['humidity'],
-            pop=entry['precipProbability'],
-            precip_mmph=entry['precipIntensity'],
-            wind_mps=entry['windSpeed'],
-            temp_high=entry['apparentTemperatureHigh'],
-            temp_high_time=entry['apparentTemperatureHighTime'],
-            temp_low=entry['apparentTemperatureLow'],
-            temp_low_time=entry['apparentTemperatureLowTime']
-        ).set(entry['apparentTemperatureLow'])
-        counter+=1
+def init_table(cur, schema):
+    schema_string = ''
+    for c in schema:
+        schema_string+='{} {},'.format(c[0], c[1])
+    schema_string = schema_string[:-1]
+    command =  """CREATE TABLE IF NOT EXISTS hourly ({});""".format(schema_string)
+    cur.execute(command)
 
-def main():
+def clean_tables(cur, tables):
+    for table in tables:
+        cur.execute("""DELETE FROM {};""".format(table))
+
+def main(api_key, coordinates, refresh_interval, db_user, db_host):
+    conn = psycopg2.connect(dbname=db_user, user=db_user, host=db_host)
+    cur = conn.cursor()
+    hourly_schema = [
+        ('row', 'SMALLINT'),
+        ('day', 'TEXT'),
+        ('hour', 'TEXT'),
+        ('summary', 'TEXT'),
+        ('precipProbability', 'float(2)'),
+        ('precipIntensity', 'float(2)'),
+        ('windSpeed', 'float(2)'),
+        ('humidity', 'float(2)'),
+        ('temperature', 'float(2)'),
+    ]
+    init_table(cur, hourly_schema)
     while True:
         data = get_forecast(api_key, coordinates)
-        set_current(data['currently'], location)
-        set_hourly(data['hourly']['data'], location)
-        set_daily(data['daily']['data'], location)
-        data = None
-        sleep(request_interval)
+        clean_tables(cur, ['hourly'])
+        count = 0
+        for entry in data['hourly']['data']:
+            fields = []
+            for c in hourly_schema:
+                if c[0] in entry:
+                    fields.append((c[0], entry[c[0]], c[1]))
+                elif c[0] == 'day':
+                    fields.append((c[0], render_time(entry['time'])[0], c[1]))
+                elif c[0] == 'hour':
+                    fields.append((c[0], render_time(entry['time'])[1], c[1]))
+                elif c[0] == 'row':
+                    fields.append((c[0], count, c[1]))
+            insert_hourly(cur, fields)
+            count+=1
+        conn.commit()
+        sleep(refresh_interval)
+    cur.close()
+    conn.close()
 
 if __name__ == '__main__':
-    api_key = environ['DARK_SKY_API_KEY']
-    coordinates = environ['DARK_SKY_COORDINATES']
-    location = environ['LOCATION_NAME']
-    metrics_port = int(environ['METRICS_PORT'])
-    request_interval = int(environ['REQUEST_INTERVAL'])
-
-    start_http_server(metrics_port)
-    current = Gauge(
-        'weather_current',
-        'Current weather conditions. Value is the apparent temperature.',
-        ['location', 'summary', 'humidity', 'pop', 'precip_mmph', 'wind_mps']
+    main(
+        environ['DARK_SKY_API_KEY'],
+        environ['COORDINATES'],
+        int(environ['REFRESH_INTERVAL']),
+        environ['DB_USER'],
+        environ['DB_HOST']
     )
-    hourly = Gauge(
-        'weather_hourly', 'Hourly weather forecast',
-        ['l0_order', 'l1_location', 'l2_day', 'l3_time', 'l4_summary',
-         'l5_humidity', 'l6_pop', 'l7_precip_mmph', 'l8_wind_mps']
-    )
-    daily = Gauge(
-        'weather_daily',
-        'Daily weather forecast. Value is the apparent low temperature',
-        ['order', 'location', 'day', 'summary', 'humidity', 'pop',
-         'precip_mmph', 'wind_mps', 'temp_high', 'temp_high_time',
-         'temp_low', 'temp_low_time']
-    )
-
-    main()
