@@ -26,9 +26,9 @@ def render_time(timestamp):
     today = int(strftime('%d'))
     ts_day = int(strftime('%d', localtime(timestamp)))
     if ts_day == today:
-        day = 'today'
+        day = 'Today'
     elif ts_day == (today + 1):
-        day = 'tomorrow'
+        day = 'Tomorrow'
     else:
         day = strftime('%A', localtime(timestamp))
     return (day, time)
@@ -56,11 +56,11 @@ def set_hourly(entries, location):
             l2_day=render_time(entry['time'])[0],
             l3_time=render_time(entry['time'])[1],
             l4_summary=entry['summary'],
-            l5_humidity=entry['humidity'],
-            l6_pop=entry['precipProbability'],
-            l7_precip_mmph=entry['precipIntensity'],
-            l8_wind_mps=entry['windSpeed']).set(
-                entry['apparentTemperature'])
+            l5_humidity=str(round(entry['humidity'] * 100)) + ' %',
+            l6_pop=str(round(entry['precipProbability'] * 100)) + ' %',
+            l7_precip_mmph=str(round(entry['precipIntensity'], 1)) + ' mm',
+            l8_wind_mps=str(round(entry['windSpeed'])) + ' mps'
+        ).set(entry['apparentTemperature'])
         counter+=1
 
 def set_daily(entries, location):
