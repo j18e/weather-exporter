@@ -21,38 +21,69 @@ def get_forecast(api_key, coordinates):
     log_message('successfully fetched forecast')
     return resp.json()
 
-def set_current(entry, location):
-    current_temp.labels(location=location).set(entry['apparentTemperature'])
-    current_pop.labels(location=location).set(entry['precipProbability'])
-
 def render_time(timestamp):
-    result = strftime('%H%M', localtime(timestamp))
-    return result
-
-def render_day(timestamp):
+    time = strftime('%H:%M', localtime(timestamp))
     today = int(strftime('%d'))
     ts_day = int(strftime('%d', localtime(timestamp)))
     if ts_day == today:
-        return 'today'
+        day = 'today'
     elif ts_day == (today + 1):
-        return 'tomorrow'
+        day = 'tomorrow'
     else:
-        return strftime('%A', localtime(timestamp))
+        day = strftime('%A', localtime(timestamp))
+    return (day, time)
 
-def set_hourly(entries, location, today):
-    for entry in entries:
-        hourly_temp.labels(location=location, day=render_day(entry['time']), time=render_time(entry['time'])).set(entry['apparentTemperature'])
+def set_current(entry, location):
+    current.labels(
+        location=location,
+        summary=entry['summary'],
+        humidity=entry['humidity'],
+        pop=entry['precipProbability'],
+        precip_mmph=entry['precipIntensity'],
+        wind_mps=entry['windSpeed']
+    ).set(entry['temperature'])
 
-def set_daily(entries, location, today):
+def set_hourly(entries, location):
+    order = 0
     for entry in entries:
-        daily_temp_high.labels(location=location, day=render_day(entry['time']), time=render_time(entry['time'])).set(entry['apparentTemperatureHigh'])
+        hourly.labels(
+            order=order,
+            location=location,
+            summary=entry['summary'],
+            day=render_time(entry['time'])[0],
+            time=render_time(entry['time'])[1],
+            humidity=entry['humidity'],
+            pop=entry['precipProbability'],
+            precip_mmph=entry['precipIntensity'],
+            wind_mps=entry['windSpeed']).set(
+                entry['apparentTemperature'])
+        order+=1
+
+def set_daily(entries, location):
+    order = 0
+    for entry in entries:
+        daily.labels(
+            order=order,
+            location=location,
+            day=render_time(entry['time'])[0],
+            summary=entry['summary'],
+            humidity=entry['humidity'],
+            pop=entry['precipProbability'],
+            precip_mmph=entry['precipIntensity'],
+            wind_mps=entry['windSpeed'],
+            temp_high=entry['apparentTemperatureHigh'],
+            temp_high_time=entry['apparentTemperatureHighTime'],
+            temp_low=entry['apparentTemperatureLow'],
+            temp_low_time=entry['apparentTemperatureLowTime']
+        ).set(entry['apparentTemperatureLow'])
+        order+=1
 
 def main():
     while True:
         data = get_forecast(api_key, coordinates)
         set_current(data['currently'], location)
-        set_hourly(data['hourly']['data'], location, int(strftime('%d')))
-        set_daily(data['daily']['data'], location, int(strftime('%d')))
+        set_hourly(data['hourly']['data'], location)
+        set_daily(data['daily']['data'], location)
         data = None
         sleep(request_interval)
 
@@ -64,10 +95,22 @@ if __name__ == '__main__':
     request_interval = int(environ['REQUEST_INTERVAL'])
 
     start_http_server(metrics_port)
-    current_temp = Gauge('weather_current_temp', 'Current temperature (feels like)', ['location'])
-    current_pop = Gauge('weather_current_pop', 'Current probability of precipitation', ['location'])
-    hourly_temp = Gauge('weather_hourly_temp', 'Hourly temperature (feels like)', ['location', 'day', 'time'])
-    daily_temp_high = Gauge('weather_daily_temp_high', 'Daily temperature high (feels like)', ['location', 'day', 'time'])
-    daily_temp_low = Gauge('weather_daily_temp_low', 'Daily temperature low (feels like)', ['location', 'day', 'time'])
+    current = Gauge(
+        'weather_current',
+        'Current weather conditions. Value is the apparent temperature.',
+        ['location', 'summary', 'humidity', 'pop', 'precip_mmph', 'wind_mps']
+    )
+    hourly = Gauge(
+        'weather_hourly', 'Hourly weather forecast',
+        ['order', 'location', 'summary', 'day', 'time', 'humidity', 'pop',
+         'precip_mmph', 'wind_mps']
+    )
+    daily = Gauge(
+        'weather_daily',
+        'Daily weather forecast. Value is the apparent low temperature',
+        ['order', 'location', 'day', 'summary', 'humidity', 'pop',
+         'precip_mmph', 'wind_mps', 'temp_high', 'temp_high_time',
+         'temp_low', 'temp_low_time']
+    )
 
     main()
