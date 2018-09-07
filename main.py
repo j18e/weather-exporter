@@ -44,8 +44,12 @@ def set_current(entry, location):
     ).set(entry['temperature'])
 
 def set_hourly(entries, location):
-    order = 0
+    counter = 0
     for entry in entries:
+        if counter < 10:
+            order = '0' + str(counter)
+        else:
+            order = str(counter)
         hourly.labels(
             order=order,
             location=location,
@@ -57,10 +61,15 @@ def set_hourly(entries, location):
             precip_mmph=entry['precipIntensity'],
             wind_mps=entry['windSpeed']).set(
                 entry['apparentTemperature'])
-        order+=1
+        counter+=1
 
 def set_daily(entries, location):
-    order = 0
+    counter = 0
+    for entry in entries:
+        if counter < 10:
+            order = '0' + str(counter)
+        else:
+            order = str(counter)
     for entry in entries:
         daily.labels(
             order=order,
@@ -76,7 +85,7 @@ def set_daily(entries, location):
             temp_low=entry['apparentTemperatureLow'],
             temp_low_time=entry['apparentTemperatureLowTime']
         ).set(entry['apparentTemperatureLow'])
-        order+=1
+        counter+=1
 
 def main():
     while True:
