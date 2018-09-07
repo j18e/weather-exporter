@@ -51,15 +51,15 @@ def set_hourly(entries, location):
         else:
             order = str(counter)
         hourly.labels(
-            order=order,
-            location=location,
-            summary=entry['summary'],
-            day=render_time(entry['time'])[0],
-            time=render_time(entry['time'])[1],
-            humidity=entry['humidity'],
-            pop=entry['precipProbability'],
-            precip_mmph=entry['precipIntensity'],
-            wind_mps=entry['windSpeed']).set(
+            l0_order=order,
+            l1_location=location,
+            l2_day=render_time(entry['time'])[0],
+            l3_time=render_time(entry['time'])[1],
+            l4_summary=entry['summary'],
+            l5_humidity=entry['humidity'],
+            l6_pop=entry['precipProbability'],
+            l7_precip_mmph=entry['precipIntensity'],
+            l8_wind_mps=entry['windSpeed']).set(
                 entry['apparentTemperature'])
         counter+=1
 
@@ -111,8 +111,8 @@ if __name__ == '__main__':
     )
     hourly = Gauge(
         'weather_hourly', 'Hourly weather forecast',
-        ['order', 'location', 'summary', 'day', 'time', 'humidity', 'pop',
-         'precip_mmph', 'wind_mps']
+        ['l0_order', 'l1_location', 'l2_day', 'l3_time', 'l4_summary',
+         'l5_humidity', 'l6_pop', 'l7_precip_mmph', 'l8_wind_mps']
     )
     daily = Gauge(
         'weather_daily',
