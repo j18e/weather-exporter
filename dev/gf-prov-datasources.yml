@@ -1,0 +1,11 @@
+apiVersion: 1
+datasources:
+- name: forecast
+  isDefault: true
+  type: postgres
+  url: forecastdb:5432
+  user: forecast
+  database: forecast
+  jsonData:
+    sslmode: disable
+

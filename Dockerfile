@@ -6,8 +6,10 @@ RUN apk add --no-cache --update \
 
 RUN pip install \
     requests \
-    psycopg2
+    psycopg2 \
+    docopt
 
 ADD main.py main.py
 
-CMD ["python", "-u", "main.py"]
+ENTRYPOINT ["python", "-u"]
+CMD ["main.py"]

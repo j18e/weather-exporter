@@ -1,0 +1,26 @@
+version: '3'
+services:
+  weather-exporter:
+    build: ../
+    depends_on: ["forecastdb"]
+    command: "-f /tmp/example-response.json --db-host forecastdb --db-user forecast --refresh-interval 120"
+    volumes: ["./example-response.json:/tmp/example-response.json"]
+
+  forecastdb:
+    image: "postgres:alpine"
+    expose:
+    - "5432"
+    environment:
+      POSTGRES_USER: forecast
+
+  grafana:
+    image: "grafana/grafana"
+    depends_on: ["forecastdb"]
+    environment:
+      GF_SECURITY_ADMIN_PASSWORD: secret
+    ports:
+    - "3000:3000"
+    volumes:
+    - "./gf-prov-datasources.yml:/etc/grafana/provisioning/datasources/datasources.yml:ro"
+    - "./gf-prov-dashboards.yml:/etc/grafana/provisioning/dashboards/dashboards.yml:ro"
+    - "./gf-dashboard.json:/etc/grafana/dashboards/dashboard.json:ro"
