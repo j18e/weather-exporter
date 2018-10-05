@@ -1,0 +1,22 @@
+version: '3'
+services:
+  weather-exporter:
+    build: ../
+    volumes: ["./example-response.json:/tmp/example-response.json"]
+    command: "-f /tmp/example-response.json --refresh-interval 120"
+
+  prometheus:
+    image: "prom/prometheus"
+    ports: ["9090:9090"]
+    volumes: ["./prometheus.yml:/prometheus.yml"]
+    command: "--config.file=/prometheus.yml"
+
+  grafana:
+    image: "grafana/grafana"
+    environment:
+      GF_SECURITY_ADMIN_PASSWORD: secret
+    ports: ["3000:3000"]
+    volumes:
+    - "./gf-prov-datasources.yml:/etc/grafana/provisioning/datasources/datasources.yml:ro"
+    - "./gf-prov-dashboards.yml:/etc/grafana/provisioning/dashboards/dashboards.yml:ro"
+    - "./gf-dashboard.json:/etc/grafana/dashboards/dashboard.json:ro"
