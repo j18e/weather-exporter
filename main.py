@@ -1,125 +1,132 @@
 #!/usr/bin/env python
 
-from os import environ
+"""Weather Exporter
+
+Usage:
+    weather-exporter -h | --help
+    weather-exporter --api-key <api_key> --coordinates <coordinates> [options]
+    weather-exporter test <filename>
+
+Options:
+    -h, --help                      shows the help
+    --api-key <api_key>              Dark Sky API key
+    --coordinates <coordinates>     Coordinates for forecast (49.38383,11.38383)
+    --refresh-interval <interval>   Seconds to wait between fetching weather data
+    --port <port>                   TCP port on which to expose Prometheus metrics
+"""
+
 from prometheus_client import start_http_server, Gauge
+from datetime import datetime, timedelta
+from docopt import docopt
+from json import loads
 from requests import get
-from sys import stdin
-from time import strftime, localtime, sleep
-import json
+from time import sleep
+from datetime import datetime
 
 def log_message(message):
-    ts = strftime('%Y-%m-%dT%H:%M:%S')
-    print(ts, message)
+    time_format = "%Y-%m-%dT%H:%M:%S"
+    timestamp = datetime.now()
+    print(timestamp.strftime(time_format), message)
 
-def get_forecast(api_key, coordinates):
-    url = 'https://api.darksky.net/forecast/{}/{}?units=si'
-    url = url.format(api_key, coordinates)
-    resp = get(url)
-    if resp.status_code != 200:
-        log_message('error: got {} fetching forecast'.format(resp.status_code))
-        return
+def get_forecast(args):
+    if args['test']:
+        with open(args['<filename>'], 'r') as stream:
+            data = loads(stream.read())
+        data = populate_timestamps(data)
+    else:
+        url = 'https://api.darksky.net/forecast/{}/{}?units=si'
+        url = url.format(args['--api-key'], args['--coordinates'])
+        resp = get(url)
+        if resp.status_code != 200:
+            log_message('error: got {} fetching forecast'.format(resp.status_code))
+            return
+        data = resp.json()
     log_message('successfully fetched forecast')
-    return resp.json()
+    return data
+
+def populate_timestamps(data):
+    now = datetime.now()
+    daily = now.replace(hour=0, minute=0, second=0, microsecond=0)
+    hourly = now.replace(minute=0, second=0, microsecond=0)
+    data['currently']['time'] = int(now.strftime("%s"))
+    for day in data['daily']['data']:
+        day['time'] = int(daily.strftime("%s"))
+        daily += timedelta(days=1)
+    for hour in data['hourly']['data']:
+        hour['time'] = int(hourly.strftime("%s"))
+        hourly += timedelta(hours=1)
+    return data
 
 def render_time(timestamp):
-    time = strftime('%H:%M', localtime(timestamp))
-    today = int(strftime('%d'))
-    ts_day = int(strftime('%d', localtime(timestamp)))
-    if ts_day == today:
-        day = 'Today'
-    elif ts_day == (today + 1):
-        day = 'Tomorrow'
+    timestamp = datetime.fromtimestamp(timestamp)
+    time = timestamp.strftime("%H:%M")
+    now = datetime.now()
+    if timestamp.day == now.day:
+        day = 'today'
+    elif timestamp.day == (now.day + 1):
+        day = 'tomorrow'
     else:
-        day = strftime('%A', localtime(timestamp))
-    return (day, time)
+        day = timestamp.strftime("%A")
+    return day, time
 
-def set_current(entry, location):
-    current.labels(
-        location=location,
-        summary=entry['summary'],
-        humidity=entry['humidity'],
-        pop=entry['precipProbability'],
-        precip_mmph=entry['precipIntensity'],
-        wind_mps=entry['windSpeed']
-    ).set(entry['temperature'])
-
-def set_hourly(entries, location):
-    counter = 0
+def build_hourly(entries):
+    results = []
     for entry in entries:
-        if counter < 10:
-            order = '0' + str(counter)
-        else:
-            order = str(counter)
-        hourly.labels(
-            l0_order=order,
-            l1_location=location,
-            l2_day=render_time(entry['time'])[0],
-            l3_time=render_time(entry['time'])[1],
-            l4_summary=entry['summary'],
-            l5_humidity=str(round(entry['humidity'] * 100)) + ' %',
-            l6_pop=str(round(entry['precipProbability'] * 100)) + ' %',
-            l7_precip_mmph=str(round(entry['precipIntensity'], 1)) + ' mm',
-            l8_wind_mps=str(round(entry['windSpeed'])) + ' mps'
-        ).set(entry['apparentTemperature'])
-        counter+=1
+        day, time = render_time(entry['time'])
+        results.append({
+            'day': day,
+            'time': time,
+            'temp': entry['apparentTemperature'],
+        })
+    return results
 
-def set_daily(entries, location):
-    counter = 0
+def build_daily(entries):
+    results = []
     for entry in entries:
-        if counter < 10:
-            order = '0' + str(counter)
-        else:
-            order = str(counter)
-    for entry in entries:
-        daily.labels(
-            order=order,
-            location=location,
-            day=render_time(entry['time'])[0],
-            summary=entry['summary'],
-            humidity=entry['humidity'],
-            pop=entry['precipProbability'],
-            precip_mmph=entry['precipIntensity'],
-            wind_mps=entry['windSpeed'],
-            temp_high=entry['apparentTemperatureHigh'],
-            temp_high_time=entry['apparentTemperatureHighTime'],
-            temp_low=entry['apparentTemperatureLow'],
-            temp_low_time=entry['apparentTemperatureLowTime']
-        ).set(entry['apparentTemperatureLow'])
-        counter+=1
+        day, time = render_time(entry['time'])
+        results.append({
+            'day': day,
+            'temp_high': entry['apparentTemperatureHigh'],
+            'temp_low': entry['apparentTemperatureLow'],
+            'summary': entry['summary']
+        })
+    return results
 
-def main():
+def purge_labels(metric, old, new):
+    new_labels = [e['day'] + e['time'] for e in new]
+    for entry in old:
+        if entry['day'] + entry['time'] not in new_labels:
+            metric.remove(entry['day'], entry['time'])
+
+def main(args):
+    if args['--refresh-interval']:
+        refresh_interval = int(args['--refresh-interval'])
+    else:
+        refresh_interval = 120
+    if args['--port']:
+        metrics_port = int(args['--port'])
+    else:
+        metrics_port = 8080
+    start_http_server(metrics_port)
+    TEMP = Gauge('forecast_temperature', 'forecasted temperature in degrees celcius', ['day', 'time'])
+    old_hourly = []
     while True:
-        data = get_forecast(api_key, coordinates)
-        set_current(data['currently'], location)
-        set_hourly(data['hourly']['data'], location)
-        set_daily(data['daily']['data'], location)
-        data = None
-        sleep(request_interval)
+        forecast_data = get_forecast(args)
+
+#        hourly = build_hourly(forecast_data['hourly']['data'])
+#        purge_labels(TEMP, old_hourly, hourly)
+#        TEMP.labels('today', 'now').set(forecast_data['currently']['apparentTemperature'])
+#        for entry in hourly:
+#            TEMP.labels(entry['day'], entry['time']).set(entry['temp'])
+#        old_hourly = hourly
+
+        daily = build_daily(forecast_data['daily']['data'])
+        for e in daily:
+            print(e)
+
+        sleep(refresh_interval)
 
 if __name__ == '__main__':
-    api_key = environ['DARK_SKY_API_KEY']
-    coordinates = environ['DARK_SKY_COORDINATES']
-    location = environ['LOCATION_NAME']
-    metrics_port = int(environ['METRICS_PORT'])
-    request_interval = int(environ['REQUEST_INTERVAL'])
+    args = docopt(__doc__, options_first=True)
+    main(args)
 
-    start_http_server(metrics_port)
-    current = Gauge(
-        'weather_current',
-        'Current weather conditions. Value is the apparent temperature.',
-        ['location', 'summary', 'humidity', 'pop', 'precip_mmph', 'wind_mps']
-    )
-    hourly = Gauge(
-        'weather_hourly', 'Hourly weather forecast',
-        ['l0_order', 'l1_location', 'l2_day', 'l3_time', 'l4_summary',
-         'l5_humidity', 'l6_pop', 'l7_precip_mmph', 'l8_wind_mps']
-    )
-    daily = Gauge(
-        'weather_daily',
-        'Daily weather forecast. Value is the apparent low temperature',
-        ['order', 'location', 'day', 'summary', 'humidity', 'pop',
-         'precip_mmph', 'wind_mps', 'temp_high', 'temp_high_time',
-         'temp_low', 'temp_low_time']
-    )
-
-    main()
