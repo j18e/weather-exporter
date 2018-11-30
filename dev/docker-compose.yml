@@ -2,8 +2,9 @@ version: '3'
 services:
   weather-exporter:
     build: ../
+    ports: ["8080:8080"]
     volumes: ["./example-response.json:/tmp/example-response.json"]
-    command: "-f /tmp/example-response.json --refresh-interval 120"
+    command: "test /tmp/example-response.json"
 
   prometheus:
     image: "prom/prometheus"
