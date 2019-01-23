@@ -1,7 +1,11 @@
 apiVersion: 1
 datasources:
-- name: prom
+- name: weather_forecast
+  type: influxdb
+  url: http://influxdb:8086
+  database: weather_forecast
+  access: proxy
   isDefault: true
-  type: prometheus
-  url: prometheus:9090
+  jsonData:
+    keepCookies: []
 

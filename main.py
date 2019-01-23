@@ -1,41 +1,43 @@
 #!/usr/bin/env python3
 
-"""Weather Exporter
-
-Usage:
-    weather-exporter -h | --help
-    weather-exporter --api-key <api_key> --coordinates <coordinates> [options]
-    weather-exporter test <filename>
-
-Options:
-    -h, --help                      shows the help
-    --api-key <api_key>              Dark Sky API key
-    --coordinates <coordinates>     Coordinates for forecast (49.38383,11.38383)
-    --refresh-interval <interval>   Seconds to wait between fetching weather data
-    --port <port>                   TCP port on which to expose Prometheus metrics
-"""
-
-from prometheus_client import start_http_server, Gauge
-from datetime import datetime, timedelta
-from docopt import docopt
-from json import loads
-from requests import get
-from time import sleep
 from datetime import datetime
+from datetime import datetime, timedelta
+from json import loads
+from os import environ
+from requests import get, post
+from sys import argv
+from time import sleep
+
+desired_metrics = [
+    "temperature",
+    "apparentTemperature",
+    "precipProbability",
+    "precipIntensity",
+    "humidity",
+    "temperatureHigh",
+    "temperatureLow",
+    "temperatureHighTime",
+    "temperatureLowTime",
+    "apparentTemperatureHigh",
+    "apparentTemperatureLow",
+    "apparentTemperatureHighTime",
+    "apparentTemperatureLowTime",
+]
+
 
 def log_message(message):
     time_format = "%Y-%m-%dT%H:%M:%S"
     timestamp = datetime.now()
     print(timestamp.strftime(time_format), message)
 
-def get_forecast(args):
-    if args['test']:
-        with open(args['<filename>'], 'r') as stream:
+def get_forecast():
+    if len(argv) > 1 and argv[1] == "test":
+        with open(argv[2], 'r') as stream:
             data = loads(stream.read())
         data = populate_timestamps(data)
     else:
         url = 'https://api.darksky.net/forecast/{}/{}?units=si'
-        url = url.format(args['--api-key'], args['--coordinates'])
+        url = url.format(environ["API_KEY"], environ["COORDINATES"])
         resp = get(url)
         if resp.status_code != 200:
             log_message('error: got {} fetching forecast'.format(resp.status_code))
@@ -57,76 +59,42 @@ def populate_timestamps(data):
         hourly += timedelta(hours=1)
     return data
 
-def render_time(timestamp):
-    timestamp = datetime.fromtimestamp(timestamp)
-    time = timestamp.strftime("%H:%M")
-    now = datetime.now()
-    if timestamp.day == now.day:
-        day = 'today'
-    elif timestamp.day == (now.day + 1):
-        day = 'tomorrow'
+def build_measurement(prefix, entry):
+    timestamp = entry["time"] * 1000000000
+    template = "{} value={} {}\n"
+    result = ""
+    for key, value in entry.items():
+        if key in desired_metrics:
+            result += template.format(prefix + key, value, timestamp)
+    result += template.format(prefix + "summary",
+        '"{}"'.format(entry["summary"]), timestamp)
+    return result
+
+def write_data(database, payload):
+    path = "/write?db=" + database
+    resp = post(environ["INFLUXDB_URI"] + path, data=payload)
+    print(resp.text)
+    resp.raise_for_status()
+
+def main():
+    if "REFRESH_INTERVAL" in environ:
+        refresh_interval = int(environ["REFRESH_INTERVAL"])
     else:
-        day = timestamp.strftime("%A")
-    return day, time
-
-def build_hourly(entries):
-    results = []
-    for entry in entries:
-        day, time = render_time(entry['time'])
-        results.append({
-            'day': day,
-            'time': time,
-            'temp': entry['apparentTemperature'],
-        })
-    return results
-
-def build_daily(entries):
-    results = []
-    for entry in entries:
-        day, time = render_time(entry['time'])
-        results.append({
-            'day': day,
-            'temp_high': entry['apparentTemperatureHigh'],
-            'temp_low': entry['apparentTemperatureLow'],
-            'summary': entry['summary']
-        })
-    return results
-
-def purge_labels(metric, old, new):
-    new_labels = [e['day'] + e['time'] for e in new]
-    for entry in old:
-        if entry['day'] + entry['time'] not in new_labels:
-            metric.remove(entry['day'], entry['time'])
-
-def main(args):
-    if args['--refresh-interval']:
-        refresh_interval = int(args['--refresh-interval'])
-    else:
+        log_message("REFRESH_INTERVAL not set. using 120 as refresh interval")
         refresh_interval = 120
-    if args['--port']:
-        metrics_port = int(args['--port'])
-    else:
-        metrics_port = 8080
-    start_http_server(metrics_port)
-    TEMP = Gauge('forecast_temperature', 'forecasted temperature in degrees celcius', ['day', 'time'])
-    old_hourly = []
-    while True:
-        forecast_data = get_forecast(args)
-
-#        hourly = build_hourly(forecast_data['hourly']['data'])
-#        purge_labels(TEMP, old_hourly, hourly)
-#        TEMP.labels('today', 'now').set(forecast_data['currently']['apparentTemperature'])
-#        for entry in hourly:
-#            TEMP.labels(entry['day'], entry['time']).set(entry['temp'])
-#        old_hourly = hourly
-
-        daily = build_daily(forecast_data['daily']['data'])
-        for e in daily:
-            print(e)
-
-        sleep(refresh_interval)
+    database = "weather_forecast"
+    resp = post(environ["INFLUXDB_URI"] + "/query", params={"q": "CREATE DATABASE {}".format(database)})
+    resp.raise_for_status()
+    forecast_data = get_forecast()
+    results = ""
+    for entry in forecast_data["hourly"]["data"]:
+        results += build_measurement("hourly_", entry)
+    for entry in forecast_data["daily"]["data"]:
+        results += build_measurement("daily_", entry)
+    results += build_measurement("current_", forecast_data["currently"])
+    print(results)
+    write_data(database, results)
+    exit()
 
 if __name__ == '__main__':
-    args = docopt(__doc__, options_first=True)
-    main(args)
-
+    main()
